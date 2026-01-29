@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Source code (keep private, only dist is public)
+admin/
+server/
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# npm
+*.log
+package-lock.json
+
+# TypeScript
+*.tsbuildinfo
+
+# Test coverage
+coverage/

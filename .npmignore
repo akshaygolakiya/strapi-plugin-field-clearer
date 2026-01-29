@@ -1,0 +1,42 @@
+# Source files (dist is published)
+admin/
+server/
+
+# TypeScript config
+tsconfig.json
+*.tsbuildinfo
+
+# Development files
+.eslintrc*
+.prettierrc*
+.editorconfig
+
+# Test files
+__tests__/
+*.test.ts
+*.test.js
+*.spec.ts
+*.spec.js
+coverage/
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# npm/yarn
+node_modules/
+package-lock.json
+yarn.lock
+.npmrc
+
+# Misc
+*.log
+*.map
