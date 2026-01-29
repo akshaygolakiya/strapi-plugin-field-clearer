@@ -235,6 +235,7 @@ const service = ({ strapi }) => ({
     try {
       document = await strapi.documents(contentType).findOne({
         documentId,
+        status: "draft",
         populate: "*"
       });
     } catch (error) {
@@ -269,6 +270,7 @@ const service = ({ strapi }) => ({
     try {
       document = await strapi.documents(contentType).findOne({
         documentId,
+        status: "draft",
         populate: {
           [componentField]: {
             populate: "*"
@@ -472,6 +474,7 @@ const service = ({ strapi }) => ({
     try {
       document = await strapi.documents(contentType).findOne({
         documentId,
+        status: "draft",
         populate: "*"
       });
     } catch (error) {
@@ -527,6 +530,7 @@ const service = ({ strapi }) => ({
     try {
       document = await strapi.documents(contentType).findOne({
         documentId,
+        status: "draft",
         populate: {
           [componentField]: {
             populate: "*"
