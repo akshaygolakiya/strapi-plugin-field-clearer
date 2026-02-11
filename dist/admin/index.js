@@ -27833,43 +27833,6 @@ const ClearFieldModalContent = ({
     )
   );
 };
-const ClearFieldActionWrapper = ({ model, documentId, get: get2 }) => {
-  const [allowedTypes, setAllowedTypes] = React.useState(null);
-  const [loading, setLoading] = React.useState(true);
-  const fetchedRef = React.useRef(false);
-  React.useEffect(() => {
-    if (fetchedRef.current) return;
-    fetchedRef.current = true;
-    const fetchConfig = async () => {
-      try {
-        const { data } = await get2("/field-clearer/config");
-        setAllowedTypes(data.allowedContentTypes || []);
-      } catch {
-        setAllowedTypes([]);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchConfig();
-  }, [get2]);
-  if (loading || allowedTypes === null) {
-    return null;
-  }
-  if (!allowedTypes.includes(model) || !documentId) {
-    return null;
-  }
-  return {
-    label: "Clear Field",
-    icon: React.createElement(icons.Trash),
-    variant: "danger",
-    position: "panel",
-    dialog: {
-      type: "modal",
-      title: "Clear Field Data",
-      content: React.createElement(ClearFieldModalContent, { contentType: model, documentId })
-    }
-  };
-};
 const index = {
   register(app) {
     app.registerPlugin({
@@ -27882,8 +27845,20 @@ const index = {
   bootstrap(app) {
     const contentManagerApis = app.getPlugin("content-manager").apis;
     const ClearFieldAction = ({ model, documentId }) => {
-      const { get: get2 } = useFetchClient();
-      return ClearFieldActionWrapper({ model, documentId, get: get2 });
+      if (!documentId) {
+        return null;
+      }
+      return {
+        label: "Clear Field",
+        icon: React.createElement(icons.Trash),
+        variant: "danger",
+        position: "panel",
+        dialog: {
+          type: "modal",
+          title: "Clear Field Data",
+          content: React.createElement(ClearFieldModalContent, { contentType: model, documentId })
+        }
+      };
     };
     contentManagerApis.addDocumentAction([ClearFieldAction]);
   },
