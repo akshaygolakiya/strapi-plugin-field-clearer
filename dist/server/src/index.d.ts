@@ -37,6 +37,7 @@ declare const _default: {
         service: ({ strapi }: {
             strapi: import("@strapi/types/dist/core").Strapi;
         }) => {
+            fetchDocument(contentType: string, documentId: string, populate: any): Promise<import("@strapi/types/dist/modules/documents").AnyDocument>;
             previewField(contentType: string, documentId: string, fieldPath: string): Promise<{
                 fieldPath: string;
                 fieldType: string;
@@ -54,6 +55,27 @@ declare const _default: {
                 message: string;
             }>;
             previewNestedField(contentType: string, documentId: string, componentField: string, nestedField: string, indices?: number[]): Promise<{
+                fieldPath: string;
+                fieldType: string;
+                isEmpty: boolean;
+                itemCount: number;
+                items: any[];
+                message: string;
+                componentCount?: undefined;
+                totalComponentCount?: undefined;
+                targetIndices?: undefined;
+            } | {
+                fieldPath: string;
+                fieldType: string;
+                isEmpty: boolean;
+                itemCount: number;
+                componentCount: number;
+                totalComponentCount: number;
+                targetIndices: number[];
+                items: any[];
+                message: string;
+            }>;
+            previewDeepNestedField(contentType: string, documentId: string, parentField: string, componentField: string, nestedField: string, indices?: number[]): Promise<{
                 fieldPath: string;
                 fieldType: string;
                 isEmpty: boolean;
@@ -95,6 +117,15 @@ declare const _default: {
                 path: string;
             }>;
             clearNestedField(contentType: string, documentId: string, componentField: string, nestedField: string, indices?: number[]): Promise<{
+                message: string;
+                clearedCount: number;
+                path?: undefined;
+            } | {
+                message: string;
+                clearedCount: number;
+                path: string;
+            }>;
+            clearDeepNestedField(contentType: string, documentId: string, parentField: string, componentField: string, nestedField: string, indices?: number[]): Promise<{
                 message: string;
                 clearedCount: number;
                 path?: undefined;

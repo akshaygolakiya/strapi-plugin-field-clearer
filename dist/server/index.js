@@ -30,7 +30,7 @@ const config = {
 };
 const contentTypes = {};
 const PLUGIN_ID = "field-clearer";
-const VALID_FIELD_PATH_REGEX = /^[a-zA-Z_][a-zA-Z0-9_]*(\[\d+(,\d+)*\])?(\.[a-zA-Z_][a-zA-Z0-9_]*)?$/;
+const VALID_FIELD_PATH_REGEX = /^[a-zA-Z_][a-zA-Z0-9_]*(\[\d+(,\d+)*\])?(\.[a-zA-Z_][a-zA-Z0-9_]*){0,2}$/;
 const MAX_FIELD_PATH_LENGTH = 100;
 const MAX_DOCUMENT_ID_LENGTH = 50;
 const getAllowedContentTypes = (strapi) => {
@@ -54,17 +54,17 @@ const validateFieldPath = (fieldPath) => {
   return { valid: true };
 };
 const validateDocumentId = (documentId) => {
+  if (!documentId) {
+    return { valid: true };
+  }
   if (typeof documentId !== "string") {
     return { valid: false, error: "documentId must be a string" };
   }
   const trimmed = documentId.trim();
-  if (!trimmed) {
-    return { valid: false, error: "documentId cannot be empty" };
-  }
   if (trimmed.length > MAX_DOCUMENT_ID_LENGTH) {
     return { valid: false, error: `documentId exceeds maximum length of ${MAX_DOCUMENT_ID_LENGTH}` };
   }
-  if (!/^[a-zA-Z0-9]+$/.test(trimmed)) {
+  if (trimmed && !/^[a-zA-Z0-9]+$/.test(trimmed)) {
     return { valid: false, error: "documentId contains invalid characters" };
   }
   return { valid: true };
@@ -104,7 +104,7 @@ const controller = ({ strapi }) => ({
       if (!fieldPathValidation.valid) {
         return ctx.badRequest(fieldPathValidation.error);
       }
-      const result = await strapi.plugin(PLUGIN_ID).service("service").previewField(contentType, documentId.trim(), fieldPath.trim());
+      const result = await strapi.plugin(PLUGIN_ID).service("service").previewField(contentType, documentId ? documentId.trim() : "", fieldPath.trim());
       return ctx.send(result);
     } catch (error) {
       strapi.log.error("[field-clearer] Preview field error:", error);
@@ -142,8 +142,8 @@ const controller = ({ strapi }) => ({
       if (!fieldPathValidation.valid) {
         return ctx.badRequest(fieldPathValidation.error);
       }
-      strapi.log.info(`[field-clearer] Clearing field "${fieldPath}" on ${contentType} (documentId: ${documentId})`);
-      const result = await strapi.plugin(PLUGIN_ID).service("service").clearField(contentType, documentId.trim(), fieldPath.trim());
+      strapi.log.info(`[field-clearer] Clearing field "${fieldPath}" on ${contentType} (documentId: ${documentId || "single-type"})`);
+      const result = await strapi.plugin(PLUGIN_ID).service("service").clearField(contentType, documentId ? documentId.trim() : "", fieldPath.trim());
       strapi.log.info(`[field-clearer] Successfully cleared "${fieldPath}" - ${result.clearedCount} items`);
       return ctx.send(result);
     } catch (error) {
@@ -184,11 +184,11 @@ const routes = [
   }
 ];
 const parseFieldPath = (path) => {
-  const bracketMatch = path.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\[(\d+(?:,\d+)*)\](?:\.([a-zA-Z_][a-zA-Z0-9_]*))?$/);
+  const bracketMatch = path.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\[(\d+(?:,\d+)*)\](?:\.([a-zA-Z_][a-zA-Z0-9_]*))?(?:\.([a-zA-Z_][a-zA-Z0-9_]*))?$/);
   if (bracketMatch) {
-    const [, fieldName, indicesStr, nestedField] = bracketMatch;
+    const [, fieldName, indicesStr, nestedField, deepNestedField] = bracketMatch;
     const indices = indicesStr.split(",").map(Number);
-    return { fieldName, nestedField, indices };
+    return { fieldName, nestedField, deepNestedField, indices };
   }
   const parts = path.split(".");
   if (parts.length === 1) {
@@ -197,9 +197,26 @@ const parseFieldPath = (path) => {
   if (parts.length === 2) {
     return { fieldName: parts[0], nestedField: parts[1], indices: null };
   }
+  if (parts.length === 3) {
+    return { fieldName: parts[0], nestedField: parts[1], deepNestedField: parts[2], indices: null };
+  }
   throw new Error(`Invalid path format: "${path}"`);
 };
 const service = ({ strapi }) => ({
+  /**
+   * Fetch a document by documentId, or use findFirst() for single types when documentId is empty.
+   */
+  async fetchDocument(contentType, documentId, populate) {
+    if (documentId) {
+      return strapi.documents(contentType).findOne({
+        documentId,
+        populate
+      });
+    }
+    return strapi.documents(contentType).findFirst({
+      populate
+    });
+  },
   /**
    * Preview what will be deleted (dry run - no actual deletion)
    * Returns field info and items that would be deleted
@@ -208,7 +225,7 @@ const service = ({ strapi }) => ({
     if (!contentType || typeof contentType !== "string") {
       throw new Error("Invalid contentType provided");
     }
-    if (!documentId || typeof documentId !== "string") {
+    if (documentId && typeof documentId !== "string") {
       throw new Error("Invalid documentId provided");
     }
     if (!fieldPath || typeof fieldPath !== "string") {
@@ -218,12 +235,15 @@ const service = ({ strapi }) => ({
     if (!trimmedPath) {
       throw new Error("Field path cannot be empty");
     }
-    const { fieldName, nestedField, indices } = parseFieldPath(trimmedPath);
+    const { fieldName, nestedField, deepNestedField, indices } = parseFieldPath(trimmedPath);
     if (!fieldName) {
       throw new Error("Field path cannot be empty");
     }
     if (!nestedField) {
       return this.previewTopLevelField(contentType, documentId, fieldName);
+    }
+    if (deepNestedField) {
+      return this.previewDeepNestedField(contentType, documentId, fieldName, nestedField, deepNestedField, indices);
     }
     return this.previewNestedField(contentType, documentId, fieldName, nestedField, indices);
   },
@@ -233,10 +253,7 @@ const service = ({ strapi }) => ({
   async previewTopLevelField(contentType, documentId, fieldName) {
     let document;
     try {
-      document = await strapi.documents(contentType).findOne({
-        documentId,
-        populate: "*"
-      });
+      document = await this.fetchDocument(contentType, documentId, "*");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       throw new Error(`Failed to fetch document: ${message}`);
@@ -267,12 +284,9 @@ const service = ({ strapi }) => ({
   async previewNestedField(contentType, documentId, componentField, nestedField, indices = null) {
     let document;
     try {
-      document = await strapi.documents(contentType).findOne({
-        documentId,
-        populate: {
-          [componentField]: {
-            populate: "*"
-          }
+      document = await this.fetchDocument(contentType, documentId, {
+        [componentField]: {
+          populate: "*"
         }
       });
     } catch (error) {
@@ -333,7 +347,7 @@ const service = ({ strapi }) => ({
           allItems.push({
             ...item,
             componentIndex: i,
-            componentHandle: comp.handle || comp.title || comp.name || `#${i + 1}`
+            componentHandle: comp.__component || comp.handle || comp.title || comp.name || `#${i + 1}`
           });
         });
       }
@@ -356,6 +370,99 @@ const service = ({ strapi }) => ({
     };
   },
   /**
+   * Preview a deep nested field deletion (3 levels: e.g., "blocks[0].items.subfield")
+   * Used for fields inside components within dynamic zones or repeatable components
+   */
+  async previewDeepNestedField(contentType, documentId, parentField, componentField, nestedField, indices = null) {
+    let document;
+    try {
+      document = await this.fetchDocument(contentType, documentId, {
+        [parentField]: {
+          populate: {
+            [componentField]: {
+              populate: "*"
+            }
+          }
+        }
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      throw new Error(`Failed to fetch document: ${message}`);
+    }
+    if (!document) {
+      throw new Error("Document not found");
+    }
+    const parentComponents = document[parentField];
+    const displayPath = indices ? `${parentField}[${indices.join(",")}].${componentField}.${nestedField}` : `${parentField}.${componentField}.${nestedField}`;
+    if (parentComponents === void 0) {
+      throw new Error(`Field "${parentField}" does not exist on this content type`);
+    }
+    if (parentComponents === null || Array.isArray(parentComponents) && parentComponents.length === 0) {
+      return {
+        fieldPath: displayPath,
+        fieldType: "unknown",
+        isEmpty: true,
+        itemCount: 0,
+        items: [],
+        message: `"${parentField}" is empty on this document`
+      };
+    }
+    const parentArray = Array.isArray(parentComponents) ? parentComponents : [parentComponents];
+    if (indices) {
+      for (const idx of indices) {
+        if (idx < 0 || idx >= parentArray.length) {
+          throw new Error(`Index ${idx} is out of range. "${parentField}" has ${parentArray.length} item${parentArray.length !== 1 ? "s" : ""} (indices 0-${parentArray.length - 1})`);
+        }
+      }
+    }
+    const targetIndices = indices || parentArray.map((_, i) => i);
+    let totalCount = 0;
+    let fieldExists = false;
+    const allItems = [];
+    let fieldType = "unknown";
+    for (const i of targetIndices) {
+      const parentComp = parentArray[i];
+      if (!parentComp) continue;
+      const subComponent = parentComp[componentField];
+      if (subComponent === void 0) continue;
+      const subArray = Array.isArray(subComponent) ? subComponent : subComponent ? [subComponent] : [];
+      for (let j = 0; j < subArray.length; j++) {
+        const sub = subArray[j];
+        if (sub && sub[nestedField] !== void 0) {
+          fieldExists = true;
+          const value = sub[nestedField];
+          const count = this.countFieldItems(value);
+          totalCount += count;
+          fieldType = this.getFieldType(value);
+          const items = this.extractPreviewItems(value, nestedField);
+          items.forEach((item) => {
+            allItems.push({
+              ...item,
+              componentIndex: i,
+              componentHandle: parentComp.__component || parentComp.handle || parentComp.title || parentComp.name || `#${i + 1}`
+            });
+          });
+        }
+      }
+    }
+    if (!fieldExists) {
+      throw new Error(`Field "${nestedField}" does not exist inside "${parentField}.${componentField}"`);
+    }
+    const isEmpty = totalCount === 0;
+    const targetDescription = indices ? `${targetIndices.length} selected "${parentField}"` : `${parentArray.length} "${parentField}"`;
+    return {
+      fieldPath: displayPath,
+      fieldType,
+      isEmpty,
+      itemCount: totalCount,
+      componentCount: targetIndices.length,
+      totalComponentCount: parentArray.length,
+      targetIndices,
+      items: allItems,
+      message: isEmpty ? `"${nestedField}" is already empty in ${targetDescription}` : `Will delete ${totalCount} item${totalCount !== 1 ? "s" : ""} from "${nestedField}" across ${targetDescription}`
+    };
+  },
+  /**
    * Get a human-readable field type
    */
   getFieldType(value) {
@@ -366,6 +473,7 @@ const service = ({ strapi }) => ({
       if (value.length === 0) return "array (empty)";
       const first = value[0];
       if (first && typeof first === "object") {
+        if (first.__component) return "dynamic zone";
         if (first.documentId) return "relation (array)";
         if (first.id) return "component (repeatable)";
       }
@@ -389,11 +497,12 @@ const service = ({ strapi }) => ({
     if (Array.isArray(value)) {
       return value.map((item, index2) => {
         if (typeof item === "object" && item !== null) {
+          const label = item.__component ? `[${item.__component}] ${item.title || item.name || item.handle || item.code || `#${index2 + 1}`}` : item.title || item.name || item.handle || item.code || item.documentId || `Item ${index2 + 1}`;
           return {
             index: index2,
             id: item.id || item.documentId,
-            label: item.title || item.name || item.handle || item.code || item.documentId || `Item ${index2 + 1}`,
-            type: item.documentId ? "relation" : "component"
+            label,
+            type: item.__component ? "dynamic zone component" : item.documentId ? "relation" : "component"
           };
         }
         return {
@@ -441,7 +550,7 @@ const service = ({ strapi }) => ({
     if (!contentType || typeof contentType !== "string") {
       throw new Error("Invalid contentType provided");
     }
-    if (!documentId || typeof documentId !== "string") {
+    if (documentId && typeof documentId !== "string") {
       throw new Error("Invalid documentId provided");
     }
     if (!fieldPath || typeof fieldPath !== "string") {
@@ -451,12 +560,15 @@ const service = ({ strapi }) => ({
     if (!trimmedPath) {
       throw new Error("Field path cannot be empty");
     }
-    const { fieldName, nestedField, indices } = parseFieldPath(trimmedPath);
+    const { fieldName, nestedField, deepNestedField, indices } = parseFieldPath(trimmedPath);
     if (!fieldName) {
       throw new Error("Field path cannot be empty");
     }
     if (!nestedField) {
       return this.clearTopLevelField(contentType, documentId, fieldName);
+    }
+    if (deepNestedField) {
+      return this.clearDeepNestedField(contentType, documentId, fieldName, nestedField, deepNestedField, indices);
     }
     return this.clearNestedField(contentType, documentId, fieldName, nestedField, indices);
   },
@@ -470,10 +582,7 @@ const service = ({ strapi }) => ({
     }
     let document;
     try {
-      document = await strapi.documents(contentType).findOne({
-        documentId,
-        populate: "*"
-      });
+      document = await this.fetchDocument(contentType, documentId, "*");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       throw new Error(`Failed to fetch document: ${message}`);
@@ -525,12 +634,9 @@ const service = ({ strapi }) => ({
     }
     let document;
     try {
-      document = await strapi.documents(contentType).findOne({
-        documentId,
-        populate: {
-          [componentField]: {
-            populate: "*"
-          }
+      document = await this.fetchDocument(contentType, documentId, {
+        [componentField]: {
+          populate: "*"
         }
       });
     } catch (error) {
@@ -591,11 +697,15 @@ const service = ({ strapi }) => ({
         clearedCount: 0
       };
     }
+    componentArray.some((comp) => comp && comp.__component);
     const updatedComponents = componentArray.map((comp, idx) => {
       if (!comp) return null;
       const updated = { id: comp.id };
+      if (comp.__component) {
+        updated.__component = comp.__component;
+      }
       for (const [key, value] of Object.entries(comp)) {
-        if (key === "id") {
+        if (key === "id" || key === "__component") {
           continue;
         }
         if (key === nestedField && (!targetIndices || targetIndices.has(idx))) {
@@ -642,6 +752,153 @@ const service = ({ strapi }) => ({
     }
     return {
       message: `Successfully cleared "${nestedField}" from ${targetDescription} (${totalCleared} item${totalCleared !== 1 ? "s" : ""})`,
+      clearedCount: totalCleared,
+      path: displayPath
+    };
+  },
+  /**
+   * Clear a deep nested field inside component(s) within a parent field
+   * (e.g., "blocks[0].items.subfield" - clear subfield inside items inside first block)
+   * Works for dynamic zones and repeatable components with nested components
+   */
+  async clearDeepNestedField(contentType, documentId, parentField, componentField, nestedField, indices = null) {
+    if (!parentField || !componentField || !nestedField) {
+      throw new Error("Invalid field path provided");
+    }
+    let document;
+    try {
+      document = await this.fetchDocument(contentType, documentId, {
+        [parentField]: {
+          populate: {
+            [componentField]: {
+              populate: "*"
+            }
+          }
+        }
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      throw new Error(`Failed to fetch document: ${message}`);
+    }
+    if (!document) {
+      throw new Error("Document not found");
+    }
+    const parentComponents = document[parentField];
+    const displayPath = indices ? `${parentField}[${indices.join(",")}].${componentField}.${nestedField}` : `${parentField}.${componentField}.${nestedField}`;
+    if (parentComponents === void 0) {
+      throw new Error(`Field "${parentField}" does not exist on this content type`);
+    }
+    if (parentComponents === null || Array.isArray(parentComponents) && parentComponents.length === 0) {
+      return { message: `"${parentField}" is empty on this document`, clearedCount: 0 };
+    }
+    const parentArray = Array.isArray(parentComponents) ? parentComponents : [parentComponents];
+    const isRepeatable = Array.isArray(parentComponents);
+    if (indices) {
+      for (const idx of indices) {
+        if (idx < 0 || idx >= parentArray.length) {
+          throw new Error(`Index ${idx} is out of range. "${parentField}" has ${parentArray.length} item${parentArray.length !== 1 ? "s" : ""} (indices 0-${parentArray.length - 1})`);
+        }
+      }
+    }
+    const targetIndices = indices ? new Set(indices) : null;
+    let totalCleared = 0;
+    let fieldExists = false;
+    for (let i = 0; i < parentArray.length; i++) {
+      if (targetIndices && !targetIndices.has(i)) continue;
+      const parentComp = parentArray[i];
+      if (!parentComp) continue;
+      const subComponent = parentComp[componentField];
+      if (subComponent === void 0) continue;
+      const subArray = Array.isArray(subComponent) ? subComponent : subComponent ? [subComponent] : [];
+      for (const sub of subArray) {
+        if (sub && sub[nestedField] !== void 0) {
+          fieldExists = true;
+          totalCleared += this.countFieldItems(sub[nestedField]);
+        }
+      }
+    }
+    if (!fieldExists) {
+      throw new Error(`Field "${nestedField}" does not exist inside "${parentField}.${componentField}"`);
+    }
+    const targetDescription = indices ? `${indices.length} selected "${parentField}"` : `${parentArray.length} "${parentField}"`;
+    if (totalCleared === 0) {
+      return {
+        message: `"${nestedField}" is already empty in ${targetDescription}`,
+        clearedCount: 0
+      };
+    }
+    const updatedParentComponents = parentArray.map((parentComp, idx) => {
+      if (!parentComp) return null;
+      const updated = { id: parentComp.id };
+      if (parentComp.__component) {
+        updated.__component = parentComp.__component;
+      }
+      for (const [key, value] of Object.entries(parentComp)) {
+        if (key === "id" || key === "__component") continue;
+        if (key === componentField) continue;
+        if (typeof value === "string" || typeof value === "number" || typeof value === "boolean" || value === null) {
+          updated[key] = value;
+        }
+      }
+      const subComponent = parentComp[componentField];
+      const isTargeted = !targetIndices || targetIndices.has(idx);
+      if (!isTargeted || subComponent === void 0 || subComponent === null) {
+        if (subComponent === void 0 || subComponent === null) {
+          updated[componentField] = subComponent;
+        } else if (Array.isArray(subComponent)) {
+          updated[componentField] = subComponent.map((item) => {
+            if (item && typeof item === "object") {
+              return item.documentId ? { documentId: item.documentId } : { id: item.id };
+            }
+            return item;
+          });
+        } else if (typeof subComponent === "object") {
+          updated[componentField] = subComponent.documentId ? { documentId: subComponent.documentId } : { id: subComponent.id };
+        } else {
+          updated[componentField] = subComponent;
+        }
+      } else {
+        const subArray = Array.isArray(subComponent) ? subComponent : [subComponent];
+        const isSubRepeatable = Array.isArray(subComponent);
+        const updatedSubs = subArray.map((sub) => {
+          if (!sub || typeof sub !== "object") return sub;
+          const updatedSub = { id: sub.id };
+          if (sub.__component) {
+            updatedSub.__component = sub.__component;
+          }
+          for (const [key, value] of Object.entries(sub)) {
+            if (key === "id" || key === "__component") continue;
+            if (key === nestedField) continue;
+            if (typeof value === "string" || typeof value === "number" || typeof value === "boolean" || value === null) {
+              updatedSub[key] = value;
+            }
+          }
+          if (sub[nestedField] !== void 0) {
+            updatedSub[nestedField] = this.getEmptyValue(sub[nestedField]);
+          }
+          return updatedSub;
+        });
+        updated[componentField] = isSubRepeatable ? updatedSubs : updatedSubs[0];
+      }
+      return updated;
+    }).filter(Boolean);
+    const internalId = document.id;
+    if (!internalId) {
+      throw new Error("Document internal ID not found");
+    }
+    const updateData = isRepeatable ? updatedParentComponents : updatedParentComponents[0];
+    try {
+      await strapi.entityService.update(contentType, internalId, {
+        data: {
+          [parentField]: updateData
+        }
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      throw new Error(`Failed to update document: ${message}`);
+    }
+    return {
+      message: `Successfully cleared "${nestedField}" from "${componentField}" across ${targetDescription} (${totalCleared} item${totalCleared !== 1 ? "s" : ""})`,
       clearedCount: totalCleared,
       path: displayPath
     };

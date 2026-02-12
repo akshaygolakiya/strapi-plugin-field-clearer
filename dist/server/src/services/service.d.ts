@@ -3,6 +3,10 @@ declare const service: ({ strapi }: {
     strapi: Core.Strapi;
 }) => {
     /**
+     * Fetch a document by documentId, or use findFirst() for single types when documentId is empty.
+     */
+    fetchDocument(contentType: string, documentId: string, populate: any): Promise<import("@strapi/types/dist/modules/documents").AnyDocument>;
+    /**
      * Preview what will be deleted (dry run - no actual deletion)
      * Returns field info and items that would be deleted
      */
@@ -30,6 +34,31 @@ declare const service: ({ strapi }: {
      * @param indices - Optional array of component indices to target (0-based). If null, targets all components.
      */
     previewNestedField(contentType: string, documentId: string, componentField: string, nestedField: string, indices?: number[] | null): Promise<{
+        fieldPath: string;
+        fieldType: string;
+        isEmpty: boolean;
+        itemCount: number;
+        items: any[];
+        message: string;
+        componentCount?: undefined;
+        totalComponentCount?: undefined;
+        targetIndices?: undefined;
+    } | {
+        fieldPath: string;
+        fieldType: string;
+        isEmpty: boolean;
+        itemCount: number;
+        componentCount: number;
+        totalComponentCount: number;
+        targetIndices: number[];
+        items: any[];
+        message: string;
+    }>;
+    /**
+     * Preview a deep nested field deletion (3 levels: e.g., "blocks[0].items.subfield")
+     * Used for fields inside components within dynamic zones or repeatable components
+     */
+    previewDeepNestedField(contentType: string, documentId: string, parentField: string, componentField: string, nestedField: string, indices?: number[] | null): Promise<{
         fieldPath: string;
         fieldType: string;
         isEmpty: boolean;
@@ -107,6 +136,20 @@ declare const service: ({ strapi }: {
      * @param indices - Optional array of component indices to target (0-based). If null, targets all components.
      */
     clearNestedField(contentType: string, documentId: string, componentField: string, nestedField: string, indices?: number[] | null): Promise<{
+        message: string;
+        clearedCount: number;
+        path?: undefined;
+    } | {
+        message: string;
+        clearedCount: number;
+        path: string;
+    }>;
+    /**
+     * Clear a deep nested field inside component(s) within a parent field
+     * (e.g., "blocks[0].items.subfield" - clear subfield inside items inside first block)
+     * Works for dynamic zones and repeatable components with nested components
+     */
+    clearDeepNestedField(contentType: string, documentId: string, parentField: string, componentField: string, nestedField: string, indices?: number[] | null): Promise<{
         message: string;
         clearedCount: number;
         path?: undefined;

@@ -220,7 +220,7 @@ const ClearFieldModalContent = ({
         designSystem.Flex,
         { gap: 2 },
         react.createElement(designSystem.TextInput, {
-          placeholder: "e.g., coupons.freebies or coupons[1].freebies",
+          placeholder: "e.g., field, field.nested, blocks[0].items.subfield",
           value: inputValue,
           onChange: handleInputChange,
           onKeyDown: handleKeyDown,
@@ -352,7 +352,7 @@ const ClearFieldModalContent = ({
       react.createElement(designSystem.Button, { variant: "tertiary", size: "S", onClick: () => setBulkMode(true) }, "Bulk Mode")
     ),
     react.createElement(designSystem.TextInput, {
-      placeholder: "e.g., coupons.freebies or coupons[1].freebies",
+      placeholder: "e.g., field, field.nested, blocks[0].items.subfield",
       value: inputValue,
       onChange: handleInputChange,
       onKeyDown: handleKeyDown,
@@ -518,8 +518,9 @@ const index = {
   },
   bootstrap(app) {
     const contentManagerApis = app.getPlugin("content-manager").apis;
-    const ClearFieldAction = ({ model, documentId }) => {
-      if (!documentId) {
+    const ClearFieldAction = ({ model, documentId, collectionType }) => {
+      const isSingleType = collectionType === "single-types";
+      if (!documentId && !isSingleType) {
         return null;
       }
       return {
@@ -530,7 +531,7 @@ const index = {
         dialog: {
           type: "modal",
           title: "Clear Field Data",
-          content: react.createElement(ClearFieldModalContent, { contentType: model, documentId })
+          content: react.createElement(ClearFieldModalContent, { contentType: model, documentId: documentId || "" })
         }
       };
     };
