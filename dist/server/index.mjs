@@ -204,17 +204,34 @@ const parseFieldPath = (path) => {
 const service = ({ strapi }) => ({
   /**
    * Fetch a document by documentId, or use findFirst() for single types when documentId is empty.
+   * Optionally specify status ('published' or 'draft') - defaults to Strapi's default (draft in admin context).
    */
-  async fetchDocument(contentType, documentId, populate) {
-    if (documentId) {
-      return strapi.documents(contentType).findOne({
-        documentId,
-        populate
-      });
+  async fetchDocument(contentType, documentId, populate, status) {
+    const params = { populate };
+    if (status) {
+      params.status = status;
     }
-    return strapi.documents(contentType).findFirst({
-      populate
-    });
+    if (documentId) {
+      params.documentId = documentId;
+      return strapi.documents(contentType).findOne(params);
+    }
+    return strapi.documents(contentType).findFirst(params);
+  },
+  /**
+   * Smart fetch for reading relation data: tries published version first (which has complete
+   * relation data), then falls back to draft. This works around the Strapi v5 draft/publish
+   * issue where relation join tables can have mixed draft/published product IDs, causing the
+   * draft version to return incomplete relations.
+   */
+  async fetchDocumentWithPublishedFallback(contentType, documentId, populate) {
+    try {
+      const publishedDoc = await this.fetchDocument(contentType, documentId, populate, "published");
+      if (publishedDoc) {
+        return publishedDoc;
+      }
+    } catch (e) {
+    }
+    return this.fetchDocument(contentType, documentId, populate);
   },
   /**
    * Preview what will be deleted (dry run - no actual deletion)
@@ -281,16 +298,27 @@ const service = ({ strapi }) => ({
    * @param indices - Optional array of component indices to target (0-based). If null, targets all components.
    */
   async previewNestedField(contentType, documentId, componentField, nestedField, indices = null) {
+    const populate = {
+      [componentField]: {
+        populate: {
+          [nestedField]: true
+        }
+      }
+    };
     let document;
     try {
-      document = await this.fetchDocument(contentType, documentId, {
-        [componentField]: {
-          populate: "*"
-        }
-      });
+      document = await this.fetchDocumentWithPublishedFallback(contentType, documentId, populate);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
-      throw new Error(`Failed to fetch document: ${message}`);
+      try {
+        document = await this.fetchDocument(contentType, documentId, {
+          [componentField]: {
+            populate: "*"
+          }
+        });
+      } catch (finalError) {
+        const message = finalError instanceof Error ? finalError.message : "Unknown error";
+        throw new Error(`Failed to fetch document: ${message}`);
+      }
     }
     if (!document) {
       throw new Error("Document not found");
@@ -373,20 +401,35 @@ const service = ({ strapi }) => ({
    * Used for fields inside components within dynamic zones or repeatable components
    */
   async previewDeepNestedField(contentType, documentId, parentField, componentField, nestedField, indices = null) {
-    let document;
-    try {
-      document = await this.fetchDocument(contentType, documentId, {
-        [parentField]: {
-          populate: {
-            [componentField]: {
-              populate: "*"
+    const populate = {
+      [parentField]: {
+        populate: {
+          [componentField]: {
+            populate: {
+              [nestedField]: true
             }
           }
         }
-      });
+      }
+    };
+    let document;
+    try {
+      document = await this.fetchDocumentWithPublishedFallback(contentType, documentId, populate);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
-      throw new Error(`Failed to fetch document: ${message}`);
+      try {
+        document = await this.fetchDocument(contentType, documentId, {
+          [parentField]: {
+            populate: {
+              [componentField]: {
+                populate: "*"
+              }
+            }
+          }
+        });
+      } catch (fallbackError) {
+        const message = fallbackError instanceof Error ? fallbackError.message : "Unknown error";
+        throw new Error(`Failed to fetch document: ${message}`);
+      }
     }
     if (!document) {
       throw new Error("Document not found");
@@ -598,17 +641,27 @@ const service = ({ strapi }) => ({
       return { message: `Field "${fieldName}" is already empty`, clearedCount: 0 };
     }
     const clearedCount = this.countFieldItems(fieldValue);
-    const internalId = document.id;
-    if (!internalId) {
-      throw new Error("Document internal ID not found");
-    }
     const newValue = this.getEmptyValue(fieldValue);
+    const docId = document.documentId || documentId;
     try {
-      await strapi.entityService.update(contentType, internalId, {
-        data: {
-          [fieldName]: newValue
+      if (docId) {
+        await strapi.documents(contentType).update({
+          documentId: docId,
+          data: {
+            [fieldName]: newValue
+          }
+        });
+      } else {
+        const internalId = document.id;
+        if (!internalId) {
+          throw new Error("Document internal ID not found");
         }
-      });
+        await strapi.entityService.update(contentType, internalId, {
+          data: {
+            [fieldName]: newValue
+          }
+        });
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       throw new Error(`Failed to update document: ${message}`);
@@ -631,16 +684,27 @@ const service = ({ strapi }) => ({
     if (!nestedField || typeof nestedField !== "string") {
       throw new Error("Invalid nested field name provided");
     }
+    const populate = {
+      [componentField]: {
+        populate: {
+          [nestedField]: true
+        }
+      }
+    };
     let document;
     try {
-      document = await this.fetchDocument(contentType, documentId, {
-        [componentField]: {
-          populate: "*"
-        }
-      });
+      document = await this.fetchDocumentWithPublishedFallback(contentType, documentId, populate);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
-      throw new Error(`Failed to fetch document: ${message}`);
+      try {
+        document = await this.fetchDocument(contentType, documentId, {
+          [componentField]: {
+            populate: "*"
+          }
+        });
+      } catch (finalError) {
+        const message = finalError instanceof Error ? finalError.message : "Unknown error";
+        throw new Error(`Failed to fetch document: ${message}`);
+      }
     }
     if (!document) {
       throw new Error("Document not found");
@@ -734,17 +798,27 @@ const service = ({ strapi }) => ({
       }
       return updated;
     }).filter(Boolean);
-    const internalId = document.id;
-    if (!internalId) {
-      throw new Error("Document internal ID not found");
-    }
     const updateData = isRepeatable ? updatedComponents : updatedComponents[0];
+    const docId = document.documentId || documentId;
     try {
-      await strapi.entityService.update(contentType, internalId, {
-        data: {
-          [componentField]: updateData
+      if (docId) {
+        await strapi.documents(contentType).update({
+          documentId: docId,
+          data: {
+            [componentField]: updateData
+          }
+        });
+      } else {
+        const internalId = document.id;
+        if (!internalId) {
+          throw new Error("Document internal ID not found");
         }
-      });
+        await strapi.entityService.update(contentType, internalId, {
+          data: {
+            [componentField]: updateData
+          }
+        });
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       throw new Error(`Failed to update document: ${message}`);
@@ -764,20 +838,35 @@ const service = ({ strapi }) => ({
     if (!parentField || !componentField || !nestedField) {
       throw new Error("Invalid field path provided");
     }
-    let document;
-    try {
-      document = await this.fetchDocument(contentType, documentId, {
-        [parentField]: {
-          populate: {
-            [componentField]: {
-              populate: "*"
+    const populate = {
+      [parentField]: {
+        populate: {
+          [componentField]: {
+            populate: {
+              [nestedField]: true
             }
           }
         }
-      });
+      }
+    };
+    let document;
+    try {
+      document = await this.fetchDocumentWithPublishedFallback(contentType, documentId, populate);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
-      throw new Error(`Failed to fetch document: ${message}`);
+      try {
+        document = await this.fetchDocument(contentType, documentId, {
+          [parentField]: {
+            populate: {
+              [componentField]: {
+                populate: "*"
+              }
+            }
+          }
+        });
+      } catch (fallbackError) {
+        const message = fallbackError instanceof Error ? fallbackError.message : "Unknown error";
+        throw new Error(`Failed to fetch document: ${message}`);
+      }
     }
     if (!document) {
       throw new Error("Document not found");
@@ -881,17 +970,27 @@ const service = ({ strapi }) => ({
       }
       return updated;
     }).filter(Boolean);
-    const internalId = document.id;
-    if (!internalId) {
-      throw new Error("Document internal ID not found");
-    }
     const updateData = isRepeatable ? updatedParentComponents : updatedParentComponents[0];
+    const docId = document.documentId || documentId;
     try {
-      await strapi.entityService.update(contentType, internalId, {
-        data: {
-          [parentField]: updateData
+      if (docId) {
+        await strapi.documents(contentType).update({
+          documentId: docId,
+          data: {
+            [parentField]: updateData
+          }
+        });
+      } else {
+        const internalId = document.id;
+        if (!internalId) {
+          throw new Error("Document internal ID not found");
         }
-      });
+        await strapi.entityService.update(contentType, internalId, {
+          data: {
+            [parentField]: updateData
+          }
+        });
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       throw new Error(`Failed to update document: ${message}`);

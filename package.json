@@ -1,6 +1,6 @@
 {
   "name": "strapi-plugin-field-clearer",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "description": "A Strapi v5 plugin to clear/delete field data from content types. Supports nested fields, component arrays, relations, and more.",
   "keywords": [
     "strapi",

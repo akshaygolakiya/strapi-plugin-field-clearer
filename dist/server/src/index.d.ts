@@ -37,7 +37,8 @@ declare const _default: {
         service: ({ strapi }: {
             strapi: import("@strapi/types/dist/core").Strapi;
         }) => {
-            fetchDocument(contentType: string, documentId: string, populate: any): Promise<import("@strapi/types/dist/modules/documents").AnyDocument>;
+            fetchDocument(contentType: string, documentId: string, populate: any, status?: string): Promise<import("@strapi/types/dist/modules/documents").AnyDocument>;
+            fetchDocumentWithPublishedFallback(contentType: string, documentId: string, populate: any): Promise<import("@strapi/types/dist/modules/documents").AnyDocument>;
             previewField(contentType: string, documentId: string, fieldPath: string): Promise<{
                 fieldPath: string;
                 fieldType: string;

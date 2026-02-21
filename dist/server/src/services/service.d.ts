@@ -4,8 +4,16 @@ declare const service: ({ strapi }: {
 }) => {
     /**
      * Fetch a document by documentId, or use findFirst() for single types when documentId is empty.
+     * Optionally specify status ('published' or 'draft') - defaults to Strapi's default (draft in admin context).
      */
-    fetchDocument(contentType: string, documentId: string, populate: any): Promise<import("@strapi/types/dist/modules/documents").AnyDocument>;
+    fetchDocument(contentType: string, documentId: string, populate: any, status?: string): Promise<import("@strapi/types/dist/modules/documents").AnyDocument>;
+    /**
+     * Smart fetch for reading relation data: tries published version first (which has complete
+     * relation data), then falls back to draft. This works around the Strapi v5 draft/publish
+     * issue where relation join tables can have mixed draft/published product IDs, causing the
+     * draft version to return incomplete relations.
+     */
+    fetchDocumentWithPublishedFallback(contentType: string, documentId: string, populate: any): Promise<import("@strapi/types/dist/modules/documents").AnyDocument>;
     /**
      * Preview what will be deleted (dry run - no actual deletion)
      * Returns field info and items that would be deleted
